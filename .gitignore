@@ -1,0 +1,30 @@
+# clone do benchmark (baixado separadamente, ver README)
+RESTestBench/
+# ambiente e segredos
+.venv/
+ref/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+# compilacao LaTeX
+artigo/*.aux
+artigo/*.bbl
+artigo/*.blg
+artigo/*.fdb_latexmk
+artigo/*.fls
+artigo/*.log
+artigo/*.out
+# logs das rodadas
+rodada_*.log
+nohup.out
+apresentacao/*.aux
+apresentacao/*.log
+apresentacao/*.nav
+apresentacao/*.out
+apresentacao/*.snm
+apresentacao/*.toc
+apresentacao/*.fls
+apresentacao/*.fdb_latexmk
+ref/
+CLAUDE.md

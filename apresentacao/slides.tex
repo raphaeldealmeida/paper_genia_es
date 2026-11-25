@@ -1,0 +1,271 @@
+% Apresentacao de 7 min. Compilar: latexmk -pdf slides.tex
+% Notas do orador: pdflatex -jobname=notas "\def\SHOWNOTES{}\input{slides}"  (gera notas.pdf)
+\documentclass[aspectratio=169,11pt]{beamer}
+\usepackage[brazil]{babel}
+\usepackage[T1]{fontenc}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\usepackage{booktabs}
+
+\ifdefined\SHOWNOTES
+  \setbeameroption{show only notes}
+\else
+  \setbeameroption{hide notes}
+\fi
+
+\usetheme{Madrid}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+\definecolor{azul}{RGB}{31,78,121}
+\definecolor{verde}{RGB}{46,125,50}
+\definecolor{verm}{RGB}{192,57,43}
+\newcommand{\msphi}{MS$_\varphi$}
+\newcommand{\todo}[1]{\textcolor{verm}{[TODO: #1]}}
+
+\title[LLM-as-a-Judge de testes REST]{Um LLM-as-a-Judge antecipa a efetividade de testes de API REST gerados por LLMs?}
+\subtitle{Uma avaliação no RESTestBench}
+\author[R. de Almeida]{Raphael de Almeida}
+\institute[IC/UFF]{Instituto de Computação -- UFF}
+\date{IA Generativa na Engenharia de Software, 2026}
+
+\begin{document}
+
+\begin{frame}
+\titlepage
+\note{[0:00--0:10] Apenas apresentar: tema, nome e disciplina. Seguir direto para o problema.}
+\end{frame}
+
+% ---------------------------------------------------------------- 1
+\begin{frame}{Testes gerados por LLM: como saber se valem a pena?}
+\begin{columns}[T]
+\begin{column}{0.55\textwidth}
+\begin{itemize}\setlength\itemsep{0.8em}
+  \item LLMs geram testes de API REST a partir de requisitos em linguagem natural
+  \item No RESTestBench, \textbf{1.034 de 2.120} testes (49\%) já falham na implementação \emph{correta}
+  \item Medir a efetividade exige executar cada teste contra \textbf{mutantes} do serviço: infraestrutura, tempo, custo
+\end{itemize}
+\end{column}
+\begin{column}{0.4\textwidth}
+\centering
+\begin{tikzpicture}
+\fill[azul!70] (0,0) rectangle (1.1,1.6); \node[above] at (0.55,1.6) {\small 942};
+\fill[azul!35] (1.4,0) rectangle (2.5,0.23); \node[above] at (1.95,0.23) {\small 144};
+\fill[verm!70] (2.8,0) rectangle (3.9,1.65); \node[above] at (3.35,1.65) {\small 1.034};
+\node[below,font=\small] at (0.55,0) {efetivo}; \node[below,font=\small] at (1.95,0) {fraco}; \node[below,font=\small] at (3.35,0) {incorreto};
+\end{tikzpicture}
+\end{column}
+\end{columns}
+\vspace{1em}
+\begin{block}{Ideia}
+Um \textbf{LLM-as-a-Judge}, isto é, um LLM usado como juiz, que \emph{lê} o teste daria uma triagem barata, antes de executar nada.
+\end{block}
+\note{[0:10--1:10] Geramos testes de API com LLM, mas a qualidade varia muito: quase metade dos testes do RESTestBench falha ate na implementacao correta. Para saber quais valem a pena, a referencia e o teste de mutacao: injetar defeitos e ver se o teste os detecta. Isso exige subir os servicos, aplicar mutantes e rodar tudo. A ideia do trabalho: um LLM-as-a-Judge que apenas le o teste e estima a efetividade, sem executar.}
+\end{frame}
+
+% ---------------------------------------------------------------- 2
+\begin{frame}{Pergunta e desenho do estudo}
+\centering
+\begin{tikzpicture}[font=\small, node distance=5mm and 9mm,
+  caixa/.style={draw, rounded corners=3pt, align=center, minimum height=12mm, inner sep=4pt},
+  dado/.style={caixa, fill=black!6}, juiz/.style={caixa, fill=azul!12}, saida/.style={caixa, fill=verde!12},
+  seta/.style={-{Stealth[length=2.5mm]}, thick}]
+\node[dado] (rtb) {RESTestBench\\2.120 testes\\\emph{zero-shot}, 10 LLMs};
+\node[juiz, right=of rtb] (j) {LLM-as-a-Judge\\\textbf{requisito + OpenAPI + teste}\\notas de 1 a 5};
+\node[saida, right=of j] (c) {Compara com\\\textbf{\msphi{}} do benchmark};
+\node[dado, below=of j] (m) {Mutantes e execução\\\textbf{nunca} chegam ao juiz};
+\draw[seta] (rtb)--(j); \draw[seta] (j)--(c); \draw[seta,dashed] (m)-|(c);
+\end{tikzpicture}
+
+\vspace{1em}
+\begin{itemize}\setlength\itemsep{0.4em}\raggedright
+  \item[\textbf{RQ1}] A nota separa testes \textbf{efetivos}, \textbf{fracos} e \textbf{incorretos}?
+  \item[\textbf{RQ2}] O que o requisito em linguagem natural adiciona? E o baseline ``n.\ de asserts''?
+  \item[\textbf{RQ3}] Quanto custa julgar? Dois juízes concordam?
+\end{itemize}
+\note{[1:10--2:00] Nenhum teste e gerado ou executado: reaproveitamos os testes e os resultados de mutacao publicados. O juiz recebe requisito, especificacao OpenAPI e codigo do teste, e da notas de 1 a 5; nunca ve mutantes nem resultado de execucao. Comparamos a nota com o MS-phi do benchmark. Tres perguntas: separa as categorias; o que o requisito adiciona; quanto custa e se dois juizes concordam.}
+\end{frame}
+
+% ---------------------------------------------------------------- 3
+\begin{frame}{Amostra, juízes e condições}
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\textbf{Amostra:} 300 testes, 100 por categoria
+\begin{itemize}
+  \item incorreto: falha na implementação válida
+  \item fraco: passa, mas deixa mutante sobreviver
+  \item efetivo: passa e mata todos os mutantes
+\end{itemize}
+3 serviços, 10 geradores, requisitos precisos e vagos
+
+\vspace{0.6em}
+\textbf{Métrica principal:} AUC (IC 95\% por \emph{bootstrap})
+\end{column}
+\begin{column}{0.48\textwidth}
+\textbf{Juízes}
+\begin{itemize}
+  \item Claude Haiku 5.5: 300 testes, 3 condições
+  \item Gemini 3.5 Flash-Lite: 100 testes
+\end{itemize}
+\textbf{Condições (RQ2)}
+\begin{center}\small
+\begin{tabular}{@{}lccc@{}}
+\toprule & requisito & spec & teste\\ \midrule
+completa & \checkmark & \checkmark & \checkmark\\
+sem requisito & & \checkmark & \checkmark\\
+sem spec & \checkmark & & \checkmark\\
+\bottomrule\end{tabular}\end{center}
+\end{column}
+\end{columns}
+\note{[2:00--2:50] Amostra estratificada de 300 testes: 100 incorretos, 100 fracos e 100 efetivos. A metrica principal e a AUC, porque a amostra e balanceada e a AUC nao depende da prevalencia. O juiz principal e o Claude Haiku 5.5 em tres condicoes: completa, sem requisito e sem especificacao. O Gemini julga uma subamostra de 100 como segundo juiz. A rubrica foi refinada apos um piloto, e todas as notas vem da mesma versao.}
+\end{frame}
+
+% ---------------------------------------------------------------- 4
+\begin{frame}{RQ1: a nota do juiz separa as categorias}
+\begin{columns}[T]
+\begin{column}{0.52\textwidth}
+\centering
+\begin{tikzpicture}[x=1cm,y=3.4cm]
+\foreach \i/\n/\v/\c in {0/{efetivo vs.\ resto}/0.874/azul, 1/{efetivo vs.\ fraco}/0.841/azul} {
+  \fill[\c] (\i*2.6,0) rectangle (\i*2.6+1,\v); \node[above,font=\small] at (\i*2.6+0.5,\v) {\v};
+}
+\foreach \i/\v in {0/0.567, 1/0.536} {
+  \fill[black!35] (\i*2.6+1.1,0) rectangle (\i*2.6+2.1,\v); \node[above,font=\small] at (\i*2.6+1.6,\v) {\v};
+}
+\draw[dashed] (-0.2,0.5)--(5.3,0.5) node[right,font=\scriptsize]{acaso};
+\node[below,font=\scriptsize,align=center] at (1.05,0) {efetivo vs.\ resto};
+\node[below,font=\scriptsize,align=center] at (3.65,0) {efetivo vs.\ fraco};
+\fill[azul] (0.2,-0.38) rectangle (0.45,-0.33); \node[right,font=\scriptsize] at (0.45,-0.355) {juiz (nota geral)};
+\fill[black!35] (3.2,-0.38) rectangle (3.45,-0.33); \node[right,font=\scriptsize] at (3.45,-0.355) {n.\ de asserts};
+\end{tikzpicture}
+\end{column}
+\begin{column}{0.44\textwidth}
+\begin{itemize}\setlength\itemsep{0.7em}
+  \item Nota média: \textbf{2,0} incorreto, \textbf{2,8} fraco, \textbf{4,3} efetivo
+  \item AUC efetivo vs.\ resto: \textbf{0,874} [0,84; 0,91]; agrupando por requisito, [0,81; 0,93]
+  \item Contraste difícil (efetivo vs.\ fraco, ambos passam): \textbf{0,841}
+  \item Baseline de asserts: perto do acaso
+  \item Triagem com nota $\ge 4$: recall 87\%, precisão $\approx$81\% na prevalência real
+\end{itemize}
+\end{column}
+\end{columns}
+\note{[2:50--3:50] Resultado principal. A nota geral cresce de 2,0 para incorretos, 2,8 para fracos e 4,3 para efetivos. A AUC de efetivo contra o resto e 0,874 com intervalo de 0,84 a 0,91; mesmo agrupando os testes pelos 99 requisitos, o intervalo fica entre 0,81 e 0,93. O contraste mais dificil, efetivo contra fraco, em que os dois grupos passam na implementacao valida, ainda chega a 0,841. O baseline de numero de asserts, que e a heuristica barata mais obvia, fica perto do acaso, entre 0,54 e 0,58. Ou seja, o juiz vai alem de contar asserts. Como triagem, com nota 4 ou mais, ele recupera 87 por cento dos efetivos, e na prevalencia real da populacao cerca de 81 por cento dos aprovados seriam efetivos.}
+\end{frame}
+
+% ---------------------------------------------------------------- 5
+\begin{frame}{RQ2: sem o requisito, o juiz perde a distinção que importa}
+\centering
+\begin{tikzpicture}[x=1cm,y=3.2cm]
+% grupos: efetivo vs fraco (esq) e passa vs incorreto (dir)
+\fill[azul!85] (0.0,0) rectangle (0.8,0.841); \node[above,font=\small] at (0.4,0.841) {0,841};
+\fill[azul!50] (0.9,0) rectangle (1.7000000000000002,0.751); \node[above,font=\small] at (1.3,0.751) {0,751};
+\fill[azul!20] (1.8,0) rectangle (2.6,0.549); \node[above,font=\small] at (2.2,0.549) {0,549};
+\fill[azul!85] (4.6,0) rectangle (5.3999999999999995,0.805); \node[above,font=\small] at (5.0,0.805) {0,805};
+\fill[azul!50] (5.5,0) rectangle (6.3,0.74); \node[above,font=\small] at (5.9,0.74) {0,740};
+\fill[azul!20] (6.3999999999999995,0) rectangle (7.199999999999999,0.808); \node[above,font=\small] at (6.8,0.808) {0,808};
+\draw[dashed] (-0.2,0.5)--(8.6,0.5) node[right,font=\scriptsize]{acaso};
+\node[below,font=\small] at (1.25,0) {efetivo vs.\ fraco};
+\node[below,font=\small] at (5.85,0) {passa vs.\ incorreto};
+\fill[azul!85] (1.2,-0.33) rectangle (1.45,-0.28); \node[right,font=\scriptsize] at (1.45,-0.305) {completa};
+\fill[azul!50] (3.0,-0.33) rectangle (3.25,-0.28); \node[right,font=\scriptsize] at (3.25,-0.305) {sem spec};
+\fill[azul!20,draw=azul] (4.7,-0.33) rectangle (4.95,-0.28); \node[right,font=\scriptsize] at (4.95,-0.305) {sem requisito};
+\end{tikzpicture}
+
+\vspace{0.8em}
+\begin{itemize}\setlength\itemsep{0.4em}\raggedright
+  \item \textbf{Sem requisito:} efetivo vs.\ fraco cai $-0{,}292$ [0,21; 0,38], quase ao acaso; incorretos continuam identificados ($-0{,}003$)
+  \item \textbf{Sem especificação:} queda menor e uniforme, 0,06 a 0,09
+\end{itemize}
+\note{[3:50--4:50] Este e o achado que mais me interessa. Sem o requisito, a separacao entre efetivos e fracos cai de 0,841 para 0,549, praticamente o acaso: perda de 0,29, com intervalo de confianca acima de zero. Mas a identificacao de testes incorretos nao muda: para prever se o teste quebra na implementacao correta, a especificacao basta. Para saber se o teste verifica o que foi pedido, o juiz precisa do requisito. Isso e coerente com o MS-phi, que so conta mutantes que violam o requisito. Sem a especificacao a perda e menor, de 0,06 a 0,09.}
+\end{frame}
+
+% ---------------------------------------------------------------- 6
+\begin{frame}{RQ3 e limites: barato, mas não substitui a execução}
+\small
+\begin{columns}[T]
+\begin{column}{0.48\textwidth}
+\textbf{Custo (Haiku 5.5, condição completa)}
+\begin{itemize}\setlength\itemsep{0.5em}
+  \item \textbf{US\$ 0,00043} por teste julgado
+  \item $\approx$ \textbf{1/10} do custo de gerá-lo (US\$ 0,0049)
+  \item 300 testes: US\$ 0,13
+\end{itemize}
+\vspace{0.5em}
+\textbf{Concordância entre modelos (Haiku $\times$ Gemini)}
+\begin{itemize}
+  \item $\kappa$ quadrático \textbf{0,82} na nota geral (100 testes); 92\% dos pares diferem em até 1 ponto
+  \item AUC do Gemini: 0,81, contra 0,88 do Haiku
+\end{itemize}
+\end{column}
+\begin{column}{0.48\textwidth}
+\textbf{Onde o juiz erra}
+\begin{itemize}\setlength\itemsep{0.5em}
+  \item \textbf{15 incorretos} com nota 4 ou 5
+  \item Falham por comportamento que a spec \textbf{não documenta}: 9 recebem 400 no TodoApp, 3 esperam 200 e recebem 201, 3 esperam outro formato de resposta
+  \item AUC menor no TodoApp (0,645) que no FastAPI (0,899)
+  \item Sem os testes do Sonnet 4.5: AUC 0,881, sem mudança relevante
+\end{itemize}
+\end{column}
+\end{columns}
+\note{[4:50--5:35] Custo: cerca de quatro decimos de milesimo de dolar por teste, um decimo do custo de gerar o teste, e os 300 custaram 13 centavos. Concordancia entre modelos: um segundo juiz, o Gemini, de outra familia, julgou 100 testes e concorda com o Haiku, com kappa quadratico de 0,82; em 92 por cento dos pares a diferenca e de ate um ponto. A AUC dele e 0,81 contra 0,88 do Haiku. Limites: 15 testes incorretos receberam nota 4 ou 5. Todos falham por comportamentos que a especificacao nao documenta: nove recebem 400 do TodoApp, tres esperam 200 e o NestJS devolve 201, e tres esperam outro formato de resposta. Ou seja, o juiz nao substitui a execucao. Retirando os testes do Claude Sonnet 4.5, da mesma familia do juiz, o resultado praticamente nao muda, entao nao ha sinal forte de autopreferencia.}
+\end{frame}
+
+% ---------------------------------------------------------------- 6b
+\begin{frame}{Repetibilidade: o juiz concorda consigo mesmo}
+\begin{columns}[T]
+\begin{column}{0.46\textwidth}
+\centering
+\begin{tikzpicture}[x=1cm,y=2.9cm]
+\fill[azul] (0,0) rectangle (1.2,0.956); \node[above,font=\small] at (0.6,0.956) {0,96};
+\fill[azul!45] (1.8,0) rectangle (3.0,0.817); \node[above,font=\small] at (2.4,0.817) {0,82};
+\draw (-0.2,0)--(3.2,0);
+\node[below,font=\scriptsize,align=center] at (0.6,0) {Haiku $\times$\\Haiku (2.ª vez)};
+\node[below,font=\scriptsize,align=center] at (2.4,0) {Haiku $\times$\\Gemini};
+\node[font=\scriptsize] at (1.5,1.15) {$\kappa$ quadrático, nota geral, 100 testes};
+\end{tikzpicture}
+\end{column}
+\begin{column}{0.5\textwidth}
+\small
+Mesmos 100 testes, juízo repetido sem temperatura fixa:
+\vspace{0.4em}
+\begin{center}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Nota & $\kappa$ & exata & dif.\ $\le 1$\\
+\midrule
+Geral & \textbf{0,96} & 81\% & 100\%\\
+Alinhamento & 0,96 & 82\% & 100\%\\
+Consist.\ spec & 0,86 & 75\% & 99\%\\
+\bottomrule
+\end{tabular}
+\end{center}
+\begin{itemize}\setlength\itemsep{0.3em}
+  \item AUC efetivo vs.\ resto: 0,876 $\rightarrow$ 0,860
+  \item Custo da repetição: US\$ 0,045
+\end{itemize}
+\end{column}
+\end{columns}
+\vspace{0.2em}
+\begin{block}{Leitura}
+As notas variam pouco entre rodadas; a maior fonte de divergência é \textbf{trocar de modelo}, não repetir o mesmo.
+\end{block}
+\note{[5:35--6:05] Como o juiz roda sem temperatura fixa, repeti o Haiku nos mesmos 100 testes. O kappa entre as duas passagens e 0,96: em 81 por cento dos casos a nota geral e identica e nunca difere mais de um ponto. A AUC quase nao muda, de 0,876 para 0,860, e a repeticao custou menos de 5 centavos. Comparando com o Gemini, que da 0,82, a leitura e que o juiz e consistente consigo mesmo; a divergencia maior vem de trocar de modelo.}
+\end{frame}
+
+% ---------------------------------------------------------------- 7
+\begin{frame}{Conclusão}
+\begin{enumerate}\setlength\itemsep{0.5em}
+  \item \textbf{Funciona como triagem:} AUC 0,874 contra o \msphi{} das categorias, muito acima de contar asserts (0,57)
+  \item \textbf{O requisito é o que dá o sinal}: sem ele, a separação entre efetivos e fracos cai para o acaso
+  \item \textbf{É consistente}: repetido, concorda consigo mesmo ($\kappa=0{,}96$) mais do que com outro modelo (0,82)
+  \item \textbf{Custa 1/10 de gerar o teste}, mas não substitui a execução: comportamentos não documentados escapam
+\end{enumerate}
+\vspace{0.6em}
+\begin{block}{Trabalhos futuros}
+Juiz como filtro dentro do laço de geração; abordagens \emph{few-shot} e de refinamento; respostas reais do serviço no contexto do juiz.
+\end{block}
+\vfill
+{\footnotesize Artefatos: github.com/raphaeldealmeida/paper\_genia\_es}
+\note{[6:05--7:00] Quatro mensagens. Primeiro, serve como triagem barata: AUC de 0,874, bem acima de contar asserts. Segundo, o requisito em linguagem natural e o que da o sinal para separar efetivos de fracos. Terceiro, e consistente: repetido nos mesmos testes, concorda consigo mesmo com kappa de 0,96, mais do que com outro modelo. Quarto, custa um decimo de gerar o teste, mas nao substitui a execucao, porque comportamentos nao documentados escapam. Como proximo passo, usar o juiz como filtro dentro do laço de geracao. Dados, scripts e notas estao no repositorio. Obrigado, perguntas?}
+\end{frame}
+
+\end{document}

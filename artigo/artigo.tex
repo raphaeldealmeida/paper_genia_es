@@ -1,0 +1,320 @@
+% Esqueleto do artigo (GenAI4SE/UFF 2026). Compilar com pdflatex + bibtex (ex.: Overleaf).
+% Marcadores \todo{} indicam o que depende das rodadas reais. Nao preencher com numeros do piloto.
+\documentclass[sigconf,nonacm]{acmart}
+\usepackage[brazil]{babel}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\msphi}{MS$_\varphi$}
+
+\settopmatter{printacmref=false}
+\renewcommand\footnotetextcopyrightpermission[1]{}
+\acmConference[GenAI4SE 2026]{IA Generativa na Engenharia de Software}{2026}{Instituto de Computação -- UFF}
+
+\begin{document}
+
+\title{Um LLM-as-a-Judge antecipa a efetividade de testes de API REST gerados por LLMs?}
+\subtitle{Uma avaliação no RESTestBench}
+
+\author{Raphael de Almeida}
+\affiliation{\institution{Instituto de Computação, Universidade Federal Fluminense}\city{Niterói}\country{Brasil}}
+\email{rsalmeida@id.uff.br}
+
+\begin{abstract}
+LLMs já geram casos de teste de APIs REST a partir de requisitos em linguagem natural, mas saber se um teste
+gerado de fato verifica o requisito exige executá-lo contra implementações com defeitos injetados.
+Investigamos se o LLM-as-a-Judge, isto é, um LLM usado como juiz que lê apenas o requisito, a especificação
+OpenAPI e o código do teste, antecipa a efetividade medida pelo \msphi{} (\emph{property-based mutation score}) do RESTestBench. Reaproveitamos
+2.120 testes gerados por 10 LLMs para 3 serviços e seus resultados de mutação publicados, e julgamos uma
+amostra estratificada de 300 testes (100 efetivos, 100 fracos, 100 incorretos) com o Claude Haiku 5.5 em
+três condições (completa, sem requisito e sem especificação) e com o Gemini 3.5 Flash-Lite como segundo
+juiz. A nota do juiz separa testes efetivos dos demais com AUC de 0,874 (IC 95\% 0,84--0,91) e efetivos
+de fracos com 0,841, enquanto o número de asserts fica perto do acaso (0,54--0,58). Sem o requisito, a
+separação entre efetivos e fracos cai para 0,549, mas a identificação de testes incorretos não muda. Julgar
+um teste custa cerca de um décimo de gerá-lo (US\$0,00043), e um segundo juiz de outra família concorda
+com ele ($\kappa$ quadrático de 0,82). O juiz serve
+como triagem barata antes da execução, desde que receba o requisito; ele não antecipa falhas causadas por
+comportamentos que a especificação não documenta.
+\end{abstract}
+
+\renewcommand\keywordsname{Palavras-chave}
+\keywords{LLM-as-a-judge, testes de API REST, geração de testes, teste de mutação, RESTestBench}
+
+\maketitle
+
+\section{Introdução}
+% ~1 coluna. Problema -> lacuna -> o que fazemos -> RQs -> contribuições/roteiro.
+Gerar testes de API REST com LLMs a partir de requisitos em linguagem natural é barato, mas a qualidade dos
+testes gerados varia muito: nas execuções \emph{zero-shot} do RESTestBench~\cite{restestbench} que analisamos, 1.034 dos 2.120 testes
+(49\%) estão incorretos: falham mesmo quando executados contra a implementação correta do serviço, o que
+constitui um falso positivo, pois o teste aponta um defeito que não existe. Medir a efetividade exige executar cada teste
+contra a implementação válida e contra mutantes do serviço, o que demanda infraestrutura (contêineres, reset
+de banco, aplicação de mutantes) e tempo. Um LLM-as-a-Judge~\cite{zheng2023judging}, isto é, um LLM usado como
+avaliador, que lesse o teste e estimasse sua efetividade seria uma triagem barata, mas não sabemos se a nota
+do juiz acompanha o que a mutação mede, nem se isso depende de o juiz ler o requisito em linguagem natural
+ou bastaria a especificação. Não propomos um gerador nem uma técnica de mutação: avaliamos empiricamente um
+LLM como estimador da efetividade, tendo a mutação publicada como referência.
+
+Este trabalho responde a três questões de pesquisa (\emph{research questions}, RQ):
+\begin{itemize}
+  \item \textbf{RQ1 (validade):} a nota do juiz separa testes efetivos, fracos e incorretos?
+  \item \textbf{RQ2 (papel do requisito):} quanto a separação cai sem o requisito ou sem a especificação, e o
+        juiz supera um baseline trivial (número de asserts)?
+  \item \textbf{RQ3 (custo e concordância):} quanto custa julgar um teste comparado a gerá-lo, e dois juízes
+        de famílias diferentes concordam?
+\end{itemize}
+O juiz separa bem testes efetivos dos demais (RQ1), mas só quando lê o requisito: sem ele, perde a
+distinção entre testes efetivos e fracos, ainda que continue reconhecendo os incorretos (RQ2). Julgar custa
+cerca de um décimo de gerar, e um segundo juiz de outra família concorda com ele ($\kappa=0{,}82$) (RQ3). A Seção~2 situa o trabalho, a Seção~3
+descreve o desenho, as Seções~4 e~5 trazem resultados e discussão, e a Seção~6 as ameaças à validade.
+
+\section{Contexto e Trabalhos Relacionados}
+\textbf{Geração de testes de API REST.} Ferramentas clássicas geram testes a partir da especificação OpenAPI,
+por \emph{fuzzing} com estado~\cite{atlidakis2019restler} ou busca evolutiva~\cite{arcuri2019evomaster}, com
+oráculos genéricos (p.ex., respostas 5xx). LLMs passaram a extrair regras das descrições em linguagem natural
+da especificação~\cite{kim2024restgpt} e a gerar entradas em abordagens multiagente~\cite{kim2025multiagent}.
+O APITestGenie~\cite{pereira2026apitestgenie} gera testes a partir de requisitos de negócio e da
+especificação, cenário próximo ao do RESTestBench~\cite{restestbench}, que mede se esses testes detectam
+violações do requisito.
+
+\textbf{Efetividade sem execução.} O teste de mutação~\cite{jia2011mutation} é o padrão para medir a
+capacidade de um teste detectar defeitos, e testes fracos são casos do problema do
+oráculo~\cite{barr2015oracle}. O número de asserts se correlaciona com a efetividade medida por
+mutação~\cite{zhang2015assertions}, o que motiva nosso baseline. A mutação preditiva estima o resultado sem
+executar mutantes, com atributos manuais~\cite{zhang2016predictive} ou modelos de
+código~\cite{jain2023contextual}, mas exige o mutante; nosso juiz vê apenas o requisito, a especificação e o
+teste.
+
+\textbf{LLM-as-a-Judge.} Juízes baseados em LLM aproximam avaliações humanas~\cite{zheng2023judging} e, em ES, já foram
+comparados a anotadores humanos~\cite{ahmed2025annotation,wang2025judge} e usados para julgar a correção de
+código sem executá-lo~\cite{tong2024codejudge}. Também favorecem os próprios textos~\cite{panickssery2024self}.
+Até onde encontramos, nenhum trabalho usa o LLM-as-a-Judge para antecipar o \emph{mutation score} de testes gerados.
+
+\section{Metodologia}
+% Maior seção (1,5--2 colunas).
+\subsection{Dados}
+Usamos o RESTestBench~\cite{restestbench} (commit \texttt{4decc1e}), que associa requisitos em linguagem
+natural de três serviços (FastAPI, NestJS RealWorld e TodoApp) a mutantes que violam propriedades desses
+requisitos. Cada requisito tem uma variante precisa e uma vaga. Não geramos nem executamos testes:
+reaproveitamos os testes da execução \texttt{results\_1}, abordagem \emph{zero-shot}, gerados por 10 LLMs,
+e seus resultados de mutação publicados, num total de 2.120 pares requisito--teste.
+
+Classificamos cada teste em três categorias: \emph{incorreto} (falha na implementação válida; \msphi{}$=0$
+pelo benchmark), \emph{fraco} (passa na válida e deixa ao menos um mutante sobreviver) e \emph{efetivo}
+(passa e mata todos os mutantes). A população tem 1.034 incorretos, 144 fracos e 942 efetivos. Sorteamos
+uma amostra estratificada de 100 testes por categoria (\emph{seed} 42), que cobre os 10 geradores, os três
+serviços (199 FastAPI, 68 NestJS, 33 TodoApp) e as duas variantes (128 precisas, 172 vagas).
+
+\subsection{LLM-as-a-Judge e rubrica}
+O juiz recebe o requisito, a especificação OpenAPI do serviço e o código do teste, e atribui notas de 1 a 5
+a três dimensões: \emph{alinhamento} ao requisito, \emph{consistência} com a especificação e uma nota
+\emph{geral}, definida como a confiança de que o teste passa numa implementação correta e falha em qualquer
+implementação que viole o requisito. O juiz nunca vê os mutantes nem o resultado da execução. Para testes
+gerados a partir do requisito vago, o juiz recebe sempre o requisito preciso, para não revelar a variante e julgar
+todos os testes contra o mesmo comportamento exigido. A rubrica ancora os extremos de cada dimensão: no
+alinhamento, 1 = sem asserção relevante sobre o comportamento exigido e 5 = monta o cenário e verifica todo
+resultado exigido; na consistência, 1 = várias chamadas contradizem a especificação e 5 = totalmente
+consistente; na geral, 1 = muito improvável e 5 = muito provável.
+
+\textbf{Refinamento após piloto.} Um piloto com o mesmo modelo, em 30 testes estratificados da própria
+amostra, mostrou que o juiz penalizava fatos do ambiente, e não o teste. A rubrica final (v2), congelada antes
+da rodada completa, acrescenta fatos que qualquer testador do serviço conhece, sem detalhes da implementação
+nem dos mutantes: (i) cada teste roda uma vez contra uma
+instância com banco recém-resetado e dados iniciais; (ii) as credenciais citadas nos requisitos existem nos
+dados iniciais; (iii) se o requisito exige uma resposta que a especificação não documenta, o juiz segue o
+requisito; (iv) a nota geral avalia o comportamento verificado, não escolhas incidentais (qual usuário ou
+quais valores). O alinhamento permanece literal. Todas as notas reportadas vêm da rubrica v2.
+
+\subsection{Condições, juízes e métricas}
+\textbf{Condições (RQ2).} \emph{Completa} (requisito + especificação + teste), \emph{sem requisito}
+(especificação + teste; o juiz infere o comportamento pretendido) e \emph{sem especificação}
+(requisito + teste). A nota geral existe nas três e é a que se compara.
+
+\textbf{Juízes (RQ3).} Principal: Claude Haiku 5.5, esforço de raciocínio \emph{medium}, sem temperatura
+(omitida conforme a documentação), especificação em cache de prompt. Secundário: Gemini 3.5 Flash-Lite pela
+API compatível com OpenAI, numa subamostra estratificada de 100 testes, condição completa. Nos mesmos 100 testes, o Haiku julgou uma
+segunda vez, para medir a repetibilidade.
+
+\textbf{Métricas.} A métrica principal é a AUC da nota geral em três contrastes: efetivo vs.\ resto, passa
+vs.\ incorreto e efetivo vs.\ fraco, com IC de 95\% por \emph{bootstrap} (2.000 reamostragens). Como testes do mesmo requisito
+não são independentes, verificamos também o IC por \emph{bootstrap} agrupado nos 99 requisitos da amostra. Como a
+amostra é estratificada, o $\rho$ de Spearman com o \msphi{} é apenas secundário. Para a RQ2 reportamos a
+diferença pareada de AUC entre condições e contra o baseline \emph{número de asserts}. Para a RQ3,
+reportamos a mediana do custo por teste julgado na condição completa, com os preços oficiais de novembro de
+2026 e o cache contabilizado (Haiku 5.5: US\$0,10/0,01/0,125/0,50
+por milhão de tokens de entrada/leitura de cache/escrita de cache/saída), contra a mediana do custo de geração publicado
+no benchmark para os mesmos testes, e o $\kappa$ ponderado quadrático entre juízes.
+
+A Figura~\ref{fig:fluxo} resume o desenho e a Tabela~\ref{tab:metricas} liga cada RQ às suas métricas.
+
+\begin{table}[t]
+\caption{Questões de pesquisa e métricas. Todas as AUC usam a nota geral (1--5), salvo indicação.}
+\label{tab:metricas}
+\small
+\begin{tabular}{@{}p{0.11\columnwidth}p{0.30\columnwidth}p{0.51\columnwidth}@{}}
+\toprule
+\textbf{RQ} & \textbf{Métrica} & \textbf{Definição} \\
+\midrule
+RQ1 & AUC por contraste & Probabilidade de um teste do grupo positivo receber nota maior que um do negativo
+  (empates valem 0,5), em efetivo vs.\ resto, passa vs.\ incorreto e efetivo vs.\ fraco; IC 95\% por
+  \emph{bootstrap} \\
+    & $\rho$ de Spearman & Correlação nota--\msphi{} (secundária: a amostra é estratificada) \\
+\midrule
+RQ2 & $\Delta$AUC pareada & AUC(completa) $-$ AUC(sem requisito, sem especificação ou n.\ de asserts) nos
+  mesmos testes; IC 95\% por \emph{bootstrap} pareado \\
+\midrule
+RQ3 & Custo por teste & US\$ por teste julgado (tokens $\times$ preço oficial) e razão julgar/gerar \\
+    & $\kappa$ quadrático & Concordância entre juízes, com concordância exata e com diferença $\le 1$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  font=\small, node distance=4mm and 7mm,
+  caixa/.style={draw, rounded corners=2pt, align=center, minimum height=11mm, inner sep=3pt},
+  dado/.style={caixa, fill=black!6},
+  juiz/.style={caixa, fill=blue!8},
+  saida/.style={caixa, fill=green!8},
+  seta/.style={-{Stealth[length=2mm]}, thick}]
+\node[dado] (rtb) {RESTestBench\\2.120 testes \emph{zero-shot}\\10 LLMs, 3 serviços};
+\node[dado, right=of rtb] (amo) {Amostra estratificada\\300 testes\\(100 por categoria)};
+\node[juiz, right=of amo, yshift=8mm] (haiku) {Claude Haiku 5.5\\completa $\cdot$ sem requisito $\cdot$ sem especificação\\(300 testes em cada)};
+\node[juiz, right=of amo, yshift=-8mm] (gem) {Gemini 3.5 Flash-Lite\\completa (100 testes)};
+\node[saida, right=24mm of amo, xshift=42mm] (comp) {Notas 1--5\\vs.\ categoria e \msphi{}\\(AUC, $\Delta$AUC, $\kappa$, custo)};
+\node[dado, below=of rtb] (mut) {Resultados de mutação\\publicados (\msphi)};
+\draw[seta] (rtb) -- (amo);
+\draw[seta] (amo.east) -- ++(3mm,0) |- (haiku.west);
+\draw[seta] (amo.east) -- ++(3mm,0) |- (gem.west);
+\draw[seta] (haiku.east) -- ++(3mm,0) |- (comp.west);
+\draw[seta] (gem.east) -- ++(3mm,0) |- (comp.west);
+\draw[seta, dashed] (mut.east) -| (comp.south);
+\node[font=\scriptsize, align=center, above=1mm of rtb.north east, anchor=south] {requisito preciso + OpenAPI + teste\\(o juiz nunca vê mutantes nem execuções)};
+\end{tikzpicture}
+\caption{Desenho do estudo. Nenhum teste é gerado ou executado: o juiz lê requisito, especificação e teste, e
+as notas são comparadas com a efetividade medida pelo benchmark (linha tracejada).}
+\label{fig:fluxo}
+\end{figure*}
+
+\section{Resultados}
+\begin{table}[t]
+\caption{AUC (IC 95\%) por contraste. Juiz principal (Claude Haiku 5.5), 300 testes por linha. ``Passa''
+reúne efetivos e fracos. Em negrito, a métrica principal.}
+\label{tab:auc}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Pontuador} & \textbf{Efetivo vs.\ resto} & \textbf{Passa vs.\ incorr.} & \textbf{Efetivo vs.\ fraco} \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{Condição completa}} \\
+\quad \textbf{Nota geral}   & \textbf{0,874} [0,84; 0,91] & \textbf{0,805} [0,75; 0,85] & \textbf{0,841} [0,79; 0,89] \\
+\quad Alinhamento           & 0,840 [0,79; 0,88] & 0,722 [0,67; 0,78] & 0,828 [0,77; 0,88] \\
+\quad Consist.\ espec.      & 0,742 [0,69; 0,79] & 0,828 [0,77; 0,88] & 0,630 [0,56; 0,70] \\
+\midrule
+\multicolumn{4}{@{}l}{\emph{Ablação (nota geral)}} \\
+\quad Sem requisito         & 0,679 [0,62; 0,74] & 0,808 [0,75; 0,86] & 0,549 [0,47; 0,62] \\
+\quad Sem especificação     & 0,782 [0,73; 0,83] & 0,740 [0,68; 0,80] & 0,751 [0,69; 0,81] \\
+\midrule
+Baseline: n.\ de asserts    & 0,567 [0,50; 0,63] & 0,579 [0,51; 0,65] & 0,536 [0,46; 0,62] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{RQ1: validade}
+A nota geral separa as três categorias (Tabela~\ref{tab:auc}). As médias crescem de incorreto (2,03) para
+fraco (2,81) e efetivo (4,29), e a AUC de efetivo vs.\ resto é 0,874 [0,84; 0,91] ([0,81; 0,93] com \emph{bootstrap} agrupado
+por requisito). O contraste mais difícil,
+efetivo vs.\ fraco, em que os dois grupos passam na implementação válida, ainda atinge 0,841. Com o limiar
+nota $\ge 4$, o juiz recupera 87 dos 100 efetivos, mas 25 fracos e 15 incorretos também passam pelo filtro: precisão de 69\% na amostra
+balanceada e de cerca de 81\% se reponderada pela prevalência da população, em que fracos são raros.
+As dimensões são complementares: a consistência com a especificação é a melhor para identificar
+incorretos (0,828 em passa vs.\ incorreto), mas quase não distingue efetivo de fraco (0,630); o alinhamento
+faz o inverso (0,828 e 0,722). O $\rho$ de Spearman entre nota geral e \msphi{} é 0,647 [0,57; 0,72]. O desempenho não piora para testes
+gerados do requisito vago (AUC 0,833, contra 0,797 dos gerados do preciso).
+
+\subsection{RQ2: papel do requisito}
+Retirar o requisito derruba a separação entre efetivos e fracos para perto do acaso (0,549); a perda pareada
+é de 0,292 [0,21; 0,38]. Já a separação entre testes que passam e incorretos não muda
+($-$0,003 [$-$0,06; 0,05]): para prever se o teste quebra na implementação correta, a especificação basta;
+para saber se ele verifica o que foi pedido, o juiz precisa do requisito. Retirar a especificação custa menos
+e de forma uniforme (0,064 a 0,092 nos três contrastes, todos com IC acima de zero). O número de asserts fica
+perto do acaso (0,54 a 0,58), e o juiz completo o supera em 0,23 a 0,31 de AUC.
+
+\subsection{RQ3: custo e concordância}
+Na condição completa, julgar um teste custou US\$0,00043 (mediana), cerca de um décimo do custo mediano de
+gerá-lo no benchmark (US\$0,0049); os 300 testes custaram US\$0,13. O cache de prompt cobre a especificação
+(8,6 mil tokens) a partir do segundo teste de cada serviço; sem a especificação o custo cai para US\$0,00033.
+Para medir a concordância entre modelos, o Gemini 3.5 Flash-Lite julgou 100 testes da amostra na condição completa. Na nota
+geral, o $\kappa$ quadrático entre os dois juízes é 0,82, com 55\% de concordância exata e 92\% com
+diferença de até um ponto. O acordo é maior no alinhamento ($\kappa=0{,}90$) e menor na consistência com a
+especificação ($\kappa=0{,}57$). O segundo juiz também separa as categorias, com AUC de 0,814 em efetivo
+vs.\ resto (0,876 para o Haiku nos mesmos testes). Aos preços do plano pago (entrada US\$0,30 e saída US\$2,50
+por milhão de tokens), ele custaria US\$0,0019 por teste, metade do custo de gerá-lo, porque o cache de prompt
+quase não foi aproveitado. Repetindo o Haiku nos mesmos 100 testes, a nota geral coincide em 81\% dos casos,
+nunca difere mais de um ponto ($\kappa=0{,}96$) e a AUC de efetivo vs.\ resto varia de 0,876 para 0,860.
+
+\section{Discussão}
+\textbf{O juiz antecipa a efetividade?} Sim, como triagem: sem executar nada, em 87\% dos pares formados por
+um teste efetivo e um não efetivo ele dá nota maior ao efetivo, a um décimo do custo de gerar o teste e sem
+subir contêineres nem resetar o banco para cada teste e cada mutante. Não substitui a
+execução: 15 incorretos receberam nota 4 ou 5. Todos falham na implementação válida por detalhes que a
+especificação não documenta: 9 recebem 400 do TodoApp em cadastros e criações que o teste esperava aceitas,
+3 esperam 200 onde o NestJS devolve 201 e 3 esperam um formato de corpo de resposta diferente do real. Nove desses 15 são do TodoApp, o que explica a AUC menor nesse serviço
+(0,645, contra 0,899 no FastAPI e 0,874 no NestJS, com apenas 33 testes).
+
+\textbf{O requisito é o que permite julgar efetividade.} Sem ele, o juiz ainda reconhece testes que não vão
+passar, mas perde a capacidade de dizer se o teste verifica o comportamento pedido. Isso é coerente com o
+\msphi, que só conta mutantes que violam o requisito, e indica que avaliar testes gerados apenas contra a
+especificação mede outra coisa.
+
+\textbf{Fidelidade literal não é efetividade.} A nota geral, orientada ao comportamento verificado, supera o
+alinhamento literal em efetivo vs.\ resto (0,874 contra 0,840). Dezesseis efetivos receberam alinhamento
+$\le 3$, quase sempre por usar dados ou usuários diferentes dos citados no requisito, e ainda assim matam
+todos os mutantes. Desses 16, só 4 receberam nota geral $\ge 4$ e os outros 12, nota 3 ou menor: mesmo instruído a ignorar escolhas incidentais,
+o juiz ainda penaliza, por exemplo, um teste que cria um usuário comum em vez de usar o administrador citado.
+
+\textbf{Autopreferência.} Sem os 34 testes gerados pelo Claude Sonnet 4.5, da mesma família do juiz, os
+resultados praticamente não mudam: a AUC de efetivo vs.\ resto vai de 0,874 para 0,881, e as diferenças da
+ablação mantêm sinal e significância.
+
+\section{Ameaças à Validade}
+\textbf{Construto.} O \msphi{} depende do conjunto de mutantes do benchmark; um teste ``efetivo'' pode deixar
+passar defeitos não modelados. A nota do juiz é uma confiança ordinal, não uma probabilidade.
+\textbf{Interna.} A rubrica foi refinada após um piloto com pares da própria amostra; mitigamos limitando os
+ajustes a fatos verificáveis do benchmark e congelando a rubrica antes da rodada final. Sem temperatura
+fixa, rodadas repetidas variam, mas pouco: numa segunda passagem em 100 testes,
+$\kappa=0{,}96$ na nota geral. O juiz principal é da mesma família de um dos geradores (Sonnet 4.5), e juízes tendem a favorecer textos
+da própria família~\cite{panickssery2024self};
+reportamos a análise sem esses testes.
+\textbf{Externa.} Três serviços, uma abordagem de geração (\emph{zero-shot}) e testes em Python; os
+resultados podem não valer para outras APIs ou linguagens.
+\textbf{Conclusão.} A amostra é balanceada (100 por categoria), diferente da população, em que fracos são
+raros (144 de 2.120); por isso usamos AUC, que não depende da prevalência, e IC por \emph{bootstrap}.
+
+\section{Conclusão e Trabalhos Futuros}
+Um LLM-as-a-Judge discrimina testes de API REST efetivos dos demais lendo apenas requisito, especificação e
+teste (RQ1: AUC 0,874). O requisito em linguagem natural é o que separa efetivos de fracos (RQ2: perda de
+0,292 de AUC sem ele). Julgar custa cerca de um décimo de gerar e dois juízes de famílias diferentes
+concordam (RQ3: $\kappa=0{,}82$; repetindo o mesmo juiz, 0,96), mas falhas causadas por comportamentos não documentados escapam: o juiz
+serve para priorizar a execução, não para substituí-la. Trabalhos futuros: usar o juiz como filtro dentro do
+laço de geração, avaliar abordagens \emph{few-shot} e de refinamento e investigar os limites do próprio benchmark nos casos em que o \msphi{} e o juiz divergem.
+
+\section*{Disponibilidade de Artefatos}
+Os artefatos estão em \url{https://github.com/raphaeldealmeida/paper_genia_es}. O pacote contém a amostra (\nolinkurl{amostra_restestbench.csv}), os scripts de
+extração, julgamento e análise, as notas e justificativas de cada juiz e condição, e as tabelas geradas.
+A amostra deriva do RESTestBench, distribuído sob AGPL-3.0.
+
+\section*{Uso de IA Generativa}
+LLMs fazem parte do método: o Claude Haiku 5.5 e o Gemini 3.5 Flash-Lite são os juízes avaliados. Além
+disso os scripts, figuras, tabelas e correção das entradas BibTeX, 
+bem como rascunho inicial do resumo foram produzidos com auxílio do Claude (Anthropic) e
+revisados pelo autor, que é o responsável pelo conteúdo.
+
+\bibliographystyle{ACM-Reference-Format}
+\bibliography{refs}
+
+\end{document}
